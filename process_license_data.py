@@ -8,10 +8,12 @@
         Assumes that all text files in target_folder are business license texts.
 
 """
+
+import sys
+import re
+from os import listdir
+
 if __name__ == '__main__':
-    import sys
-    import re
-    from os import listdir
 
     def get_naics(record):
         try:
