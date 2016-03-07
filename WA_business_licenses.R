@@ -20,15 +20,11 @@ require('ggplot2')
 require('reshape2')
 require('forecast')
 
-##----Runs in interactive----
 
-if(interactive()){
   ##----Default Parameters----
   data_dir <- "C:/Users/Locus/Documents/WAScrape/data"
   market_data <- "dow_jones_data.csv"
   population_data <- "wa_combined_intercensal_pop_data.txt"
-
-  setwd(data_dir)
 
   ##----Setup Test Logger-----
   basicConfig()
@@ -38,6 +34,11 @@ if(interactive()){
   
   # Load and combine scraped business license data from multiple files.
   # UBIs are IDs; they are numeric but may have leading 0s, so must be read as strings.
+  
+  load.data <- function(dir = data_dir){
+  
+  setwd(dir)
+  
   df <- data.frame(UBI=character(),NAICS=character(),OPEN.DATE=character(),CLOSE.DATE=character(),stringsAsFactors=FALSE)
   for(dataFile in list.files()){
     if (substr(dataFile,1,5)=="batch"){
@@ -66,10 +67,16 @@ if(interactive()){
   # Get the leading 2 digits of the taxonomic NAICS code, representing a sector.
   df$SECTOR <- sapply(df$NAICS,function(x) substr(x,1,2))  
   df <- data.table(df)
+ 
+  
+  return(df)
+  }
 
-  # List sectors for future reference.
-  sectors <- unique(df$SECTOR)
-      
+
+
+  ## Returns yearValues and monthlyValues, counts of business licensing activity over time
+  ## and licenseYears, licenseMonths
+  get.business.activity <- function(df) {   
   # Build tables of counts of businesses open/created/closed over time.
   # Aggregating at both the annual and monthly levels.
   licenseYears <- seq(min(df$OPEN.YEAR),max(df$OPEN.YEAR),by=1)
@@ -86,15 +93,25 @@ if(interactive()){
   monthlyValues$CLOSED <- sapply(licenseMonths, function(x) nrow(df[CLOSE.YEAR == as.numeric(format(x, format="%Y")) & CLOSE.MONTH == as.numeric(format(x, format="%m")),]))
   monthlyValues$MONTH <- as.numeric(format(monthlyValues$YEAR, format="%m"))
   monthlyValues <- data.table(monthlyValues)
-            
+  
+  licenseActivity <- list("yearValues" = yearValues, "monthlyValues" = monthlyValues,
+                          "licenseYears" = licenseYears, "licenseMonths" = licenseMonths)
+  return(licenseActivity)
+  }
+
+  
+  get.sector.data <- function(licenseYears, df){
   # Live businesses per year per sector
+  sectors <- unique(df$SECTOR)
   yearBySector <- data.table(SECTOR=sectors)
   setkey(yearBySector,SECTOR)
+  
   for(y in licenseYears){
   sectorInstances <- df[OPEN.YEAR <= y & y <= CLOSE.YEAR,.(length(UBI)),by=SECTOR]
   setnames(sectorInstances, "V1", as.character(y))
   yearBySector <- merge(yearBySector, sectorInstances, all.x=TRUE)
   }
+  
   rm(sectorInstances)
 
   # Reshape for plotting
@@ -109,61 +126,82 @@ if(interactive()){
   
   # Limit to years with more than 2000 observations, 
   # and omit cases where sectors have no instances (NA).
-  yearBySector <- na.omit(yearBySector[yeartotal > 2000])  
+  yearBySector <- na.omit(yearBySector[yeartotal > 2000])
   
+  # Re-type the years from factor to numeric, for later comparisons
+  yearBySector$variable <- as.numeric(levels(yearBySector$variable))[yearBySector$variable]
+  return(yearBySector)
+  }
+
   # Garbage colleciton
   gc()
+  
   
   ## DATA EXPLORATION
   
   # Businesses live each year
-  plot(yearValues$YEAR,yearValues$TOTAL.OPEN,type='l')
-  ggplot(data=yearValues, aes(x=YEAR,y=TOTAL.OPEN)) + 
-    geom_bar(stat="identity", widfh=.8, fill="#DD8888",colour="black") + 
+  plot.live.per.year <- function(yearValues){
+  p <- ggplot(data=yearValues, aes(x=YEAR,y=TOTAL.OPEN)) + 
+    geom_bar(stat="identity", width=.8, fill="#DD8888",colour="black") + 
     ggtitle("Live businesses in WA by year") +
     theme(plot.title = element_text()) +
     ylab("Registered businesses") +
     xlab("Year")
+  return(p)
+  }
   
   # Plot distribution of sector shares over time
-  ggplot(data=yearBySector, aes(x=SECTOR,y=share,fill=SECTOR)) + 
+  plot.share.over.time <- function(yearBySector, start = 1969, end = 2015){
+  p <- ggplot(data=yearBySector[variable >= start & variable <= end,], aes(x=SECTOR,y=share,fill=SECTOR)) + 
     geom_boxplot() +
     ggtitle("Sector shares over time in WA") +
     theme(plot.title = element_text(), legend.position="none") +
     ylab("Distribution of % share of economy") +
     xlab("NAICS sector")
+  return(p)
+  }
   
  # Plot individual sector's shares
-  ggplot(data=yearBySector[SECTOR==62,], aes(x=variable, y=share, group=1)) +
+  plot.sector.share <- function(yearBySector, sector = 11){
+  p <- ggplot(data=yearBySector[SECTOR==sector,], aes(x=variable, y=share, group=1)) +
    geom_point(fill="white", shape=21) +
    geom_line(linetype="dashed")
+  return(p)
+  }
     
   # Registration rates per month
+  plot.open.rates.per.month <- function(df){
   monthlyOpens <- aggregate(UBI ~ OPEN.MONTH, data = df, FUN=length)
   names(monthlyOpens) <- c('MONTH','CREATED')
-  ggplot(data=monthlyOpens, aes(x=MONTH,y=CREATED)) + 
-    geom_bar(stat="identity", widfh=.8, fill="#DD8888",colour="black") + 
+  p <- ggplot(data=monthlyOpens, aes(x=MONTH,y=CREATED)) + 
+    geom_bar(stat="identity", width=.8, fill="#DD8888",colour="black") + 
     ggtitle("Opened businesses in WA by month") +
     theme(plot.title = element_text()) +
     scale_x_continuous(breaks=1:12) +
     ylab("Businesses opened") +
     xlab("Month")
+  return(p)
+  }
   
   # Close rates per month
+  plot.close.rates.per.month <- function(df){
   monthlyCloses <- aggregate(UBI ~ CLOSE.MONTH, data = df, FUN=length)
   names(monthlyCloses) <- c('MONTH','CLOSED')
-  ggplot(data=monthlyCloses, aes(x=MONTH,y=CLOSED)) + 
-    geom_bar(stat="identity", widfh=.8, fill="#DD8888",colour="black") + 
+  p <- ggplot(data=monthlyCloses, aes(x=MONTH,y=CLOSED)) + 
+    geom_bar(stat="identity", width=.8, fill="#DD8888",colour="black") + 
     ggtitle("Business closures in WA by month") +
     theme(plot.title = element_text()) +
     scale_x_continuous(breaks=1:12) +
     ylab("Businesses closed") +
     xlab("Month")  
+  return(p)
+  }
   
   # Businesses created/closed each year
+  plot.annual.turnover <- function(yearValues){ 
   yv2<-subset(yearValues, select=-c(TOTAL.OPEN))
   yv2 <- melt(yv2,id.vars=c("YEAR"))
-  ggplot(data=yv2[YEAR!=2015,],aes(x=YEAR,y=value,fill=variable))+
+  p <- ggplot(data=yv2[YEAR!=2015,],aes(x=YEAR,y=value,fill=variable))+
     geom_bar(stat="identity",position=position_dodge())+
     scale_y_continuous() +
     ggtitle("Businesses created/closed in WA") +
@@ -171,24 +209,43 @@ if(interactive()){
     ylab("Actions") +
     xlab("Year") +
     scale_fill_hue(name="Action")
+  return(p)
+  }
   
   # Distribution of business lifetimes by sector
-  ggplot(data=df[CLOSE.YEAR!=2015,], aes(x=SECTOR,y=CLOSE.YEAR - OPEN.YEAR,fill=SECTOR)) + 
+  plot.lifetime.by.sector <- function(df){
+  p <- ggplot(data=df[CLOSE.YEAR!=2015,], aes(x=SECTOR,y=CLOSE.YEAR - OPEN.YEAR,fill=SECTOR)) + 
   geom_boxplot() +
   ggtitle("Lifetimes of WA businesses by sector\n(Not including firms currently open)") +
   theme(plot.title = element_text(),legend.position="none") +
   ylab("Years between open and close") +
   xlab("NAICS sector")
+  return(p)
+  }
 
-  # Distribution of business lifetimes by year opened  
-  lifetimesByYear <-df[,mean(CLOSE.YEAR-OPEN.YEAR),by=OPEN.YEAR]
-  ggplot(data=lifetimesByYear[OPEN.YEAR>1950,], aes(x=OPEN.YEAR,y=V1)) + 
+  # Distribution of business lifetimes by year opened 
+  plot.lifetime.by.start.year <- function(df){
+  lifetimesByYear <- df[,mean(CLOSE.YEAR-OPEN.YEAR),by=OPEN.YEAR]
+  p <- ggplot(data=lifetimesByYear[OPEN.YEAR>1950,], aes(x=OPEN.YEAR,y=V1)) + 
     geom_line(colour="red") +
     ggtitle("Average age of WA corporations by opening year\n(Including firms currently open)") +
     theme(plot.title = element_text(),legend.position="none") +
     ylab("Mean years between open and close") +
     xlab("Year opened")
+  return(p)
+  }
  
+
+##----Runs in interactive----
+if(interactive()){
+  
+  df <- load.data(data_dir)
+  licenseActivity <- get.business.activity(df)
+  licenseYears <- licenseActivity$licenseYears
+  yearValues <- licenseActivity$yearValues
+  monthlyValues <- licenseActivity$monthlyValues
+  yearBySector <- get.sector.data(licenseYears, df)
+  
  ## LOAD EXOGENOUS VARIABLE DATA
  
  # Dow Jones Industrial Average + U.S. Census Burea population estimates
