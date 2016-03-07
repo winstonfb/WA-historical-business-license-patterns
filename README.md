@@ -29,6 +29,7 @@ The next iteration of this analysis should instead start with a random sample. O
 -	wa_combined_intercensal_pop_data.txt – Annual population figures for Washington State. (Source: Census Bureau intercensal estimates from http://www.census.gov/popest/data/historical/index.html.)
 -	wa_blscrape_by_ubi.py – Python script for scraping business license images.
 -	batch_n_results.txt – Set of tab-delimited files with data from scraped business licenses.
+-	/shiny-app - Standalone files for a Shiny web app. Online at http://ec2-52-36-255-194.us-west-2.compute.amazonaws.com:3838/shiny-app/
 
 Next steps
 --------------

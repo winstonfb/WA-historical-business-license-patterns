@@ -1,131 +1,13 @@
 #-----------------------------
 # Modified WA_business_license script, without modelling.
-# ** Rework original before adding to github.
+# 
 #-----------------------------
 
 
 ##----Import Libraries-----
 require('data.table')
-require('logging')
 require('ggplot2')
-require('reshape2')
-require('forecast')
 
-
-  ##----Default Parameters----
-  data_dir <- "C:/Users/Locus/Documents/WAScrape/data"
-  market_data <- "dow_jones_data.csv"
-  population_data <- "wa_combined_intercensal_pop_data.txt"
-
-  ##----Setup Test Logger-----
-  basicConfig()
-  addHandler(writeToFile, file="~/testing.log", level='DEBUG')  
-  
-  ##----Load and shape data----
-  
-  # Load and combine scraped business license data from multiple files.
-  # UBIs are IDs; they are numeric but may have leading 0s, so must be read as strings.
-  
-  load.data <- function(dir = data_dir){
-  
-  setwd(dir)
-  
-  df <- data.frame(UBI=character(),NAICS=character(),OPEN.DATE=character(),CLOSE.DATE=character(),stringsAsFactors=FALSE)
-  for(dataFile in list.files()){
-    if (substr(dataFile,1,5)=="batch"){
-    temp <- read.csv(dataFile,sep='\t',header=TRUE,stringsAsFactors=FALSE,colClasses=c(rep("character",4)),na.strings=c('null'))
-    df<-rbind(df,temp)}
-  }
-  rm(temp)
-  
-  # Drop observations with NAs
-  df<-df[complete.cases(df),]
-  
-  # Format date columns. 'OPEN' becomes today's date.
-  df$OPEN.DATE <- as.Date(df$OPEN.DATE,format="%m/%d/%Y")
-  df[df$CLOSE.DATE=='OPEN',]$CLOSE.DATE <- format(Sys.Date(), "%m/%d/%Y")
-  df$CLOSE.DATE <- as.Date(df$CLOSE.DATE,format="%m/%d/%Y")
-
-  df$OPEN.YEAR <- as.numeric(format(df$OPEN.DATE, format="%Y"))
-  df$CLOSE.YEAR <- as.numeric(format(df$CLOSE.DATE, format="%Y"))
-
-  df$OPEN.MONTH <- as.numeric(format(df$OPEN.DATE, format="%m"))
-  df$CLOSE.MONTH <- as.numeric(format(df$CLOSE.DATE, format="%m"))
-
-  df$OPEN.DAY <- as.numeric(format(df$OPEN.DATE, format="%d"))
-  df$CLOSE.DAY <- as.numeric(format(df$CLOSE.DATE, format="%d"))
-  
-  # Get the leading 2 digits of the taxonomic NAICS code, representing a sector.
-  df$SECTOR <- sapply(df$NAICS,function(x) substr(x,1,2))  
-  df <- data.table(df)
- 
-  
-  return(df)
-  }
-
-
-
-  ## Returns yearValues and monthlyValues, counts of business licensing activity over time
-  ## and licenseYears, licenseMonths
-  get.business.activity <- function(df) {   
-  # Build tables of counts of businesses open/created/closed over time.
-  # Aggregating at both the annual and monthly levels.
-  licenseYears <- seq(min(df$OPEN.YEAR),max(df$OPEN.YEAR),by=1)
-  yearValues <- data.frame(YEAR=licenseYears, CREATED=rep(0, length(licenseYears)), TOTAL.OPEN=rep(0, length(licenseYears)), CLOSED=rep(0, length(licenseYears)))  
-  yearValues$TOTAL.OPEN <- sapply(licenseYears, function(x) nrow(df[OPEN.YEAR <= x & x <= CLOSE.YEAR,]))
-  yearValues$CREATED <- sapply(licenseYears,function(x) nrow(df[OPEN.YEAR == x,]))
-  yearValues$CLOSED <- sapply(licenseYears, function(x) nrow(df[CLOSE.YEAR == x,]))
-  yearValues <- data.table(yearValues)
-
-  licenseMonths <- seq(as.Date(paste0(min(licenseYears),"-1-1","")), by = "month", length.out=length(licenseYears)*12)
-  monthlyValues <- data.frame(YEAR=licenseMonths, CREATED=rep(0,length(licenseMonths)),TOTAL.OPEN=rep(0,length(licenseMonths)),CLOSED=rep(0,length(licenseMonths)))
-  monthlyValues$TOTAL.OPEN <- sapply(licenseMonths, function(x) nrow(df[OPEN.DATE <= as.Date(x) & as.Date(x) <= CLOSE.DATE]))
-  monthlyValues$CREATED <- sapply(licenseMonths, function(x) nrow(df[OPEN.YEAR == as.numeric(format(x, format="%Y")) & OPEN.MONTH == as.numeric(format(x, format="%m")),]))
-  monthlyValues$CLOSED <- sapply(licenseMonths, function(x) nrow(df[CLOSE.YEAR == as.numeric(format(x, format="%Y")) & CLOSE.MONTH == as.numeric(format(x, format="%m")),]))
-  monthlyValues$MONTH <- as.numeric(format(monthlyValues$YEAR, format="%m"))
-  monthlyValues <- data.table(monthlyValues)
-  
-  licenseActivity <- list("yearValues" = yearValues, "monthlyValues" = monthlyValues,
-                          "licenseYears" = licenseYears, "licenseMonths" = licenseMonths)
-  return(licenseActivity)
-  }
-
-  
-  get.sector.data <- function(licenseYears, df){
-  # Live businesses per year per sector
-  sectors <- unique(df$SECTOR)
-  yearBySector <- data.table(SECTOR=sectors)
-  setkey(yearBySector,SECTOR)
-  
-  for(y in licenseYears){
-  sectorInstances <- df[OPEN.YEAR <= y & y <= CLOSE.YEAR,.(length(UBI)),by=SECTOR]
-  setnames(sectorInstances, "V1", as.character(y))
-  yearBySector <- merge(yearBySector, sectorInstances, all.x=TRUE)
-  }
-  
-  rm(sectorInstances)
-
-  # Reshape for plotting
-  yearBySector <- melt(yearBySector,id.vars=c("SECTOR"))
-  yearTotalLive <- yearBySector[,.(sum(na.omit((value)))),by=variable]
-  setnames(yearTotalLive,c("YEAR","TOTAL"))
-  yearBySector$yeartotal <- sapply(yearBySector$variable, function(x) yearTotalLive[YEAR==x]$TOTAL)
-  yearBySector[,share:=value/yeartotal]
-  
-  # Remove '99' sectors, which are unclassified establishments
-  yearBySector <- yearBySector[SECTOR!='99']
-  
-  # Limit to years with more than 2000 observations, 
-  # and omit cases where sectors have no instances (NA).
-  yearBySector <- na.omit(yearBySector[yeartotal > 2000])
-  
-  # Re-type the years from factor to numeric, for later comparisons
-  yearBySector$variable <- as.numeric(levels(yearBySector$variable))[yearBySector$variable]
-  return(yearBySector)
-  }
-
-  # Garbage colleciton
-  gc()
   
   
   ## DATA EXPLORATION
